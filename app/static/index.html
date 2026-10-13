@@ -51,11 +51,12 @@
       <div id="messages" class="messages">
         <div class="welcome">
           <h1>Asistente de migración SSIS → ADF</h1>
-          <p>Configura las rutas a la izquierda y pídeme lo que necesites.</p>
+          <p>Analiza o convierte un paquete desde la lista de la izquierda, o pregúntame lo que necesites.</p>
           <div class="chips">
             <button class="chip">¿Qué paquetes hay en la carpeta de entrada?</button>
             <button class="chip">Analiza la complejidad de todos los paquetes</button>
             <button class="chip">Convierte todos los paquetes y valida el resultado</button>
+            <button class="chip">Muéstrame el flujo de CargaVentas y explícalo</button>
           </div>
         </div>
       </div>
@@ -66,6 +67,37 @@
     </section>
   </main>
 
+  <dialog id="viewer" class="viewer" aria-labelledby="viewer-title">
+    <header class="viewer-bar">
+      <div>
+        <h2 id="viewer-title" class="viewer-title"></h2>
+        <p id="viewer-meta" class="viewer-meta"></p>
+      </div>
+      <div class="viewer-tools">
+        <button class="tool" id="viewer-fit" title="Ajustar a la pantalla">Ajustar</button>
+        <button class="tool" id="viewer-zoom-out" title="Alejar" aria-label="Alejar">−</button>
+        <button class="tool" id="viewer-zoom-in" title="Acercar" aria-label="Acercar">+</button>
+        <button class="tool" id="viewer-png" title="Descargar como imagen PNG">Descargar PNG</button>
+        <button class="tool close" id="viewer-close" title="Cerrar" aria-label="Cerrar">✕</button>
+      </div>
+    </header>
+    <div class="viewer-body">
+      <div id="viewer-canvas" class="canvas"></div>
+      <aside id="viewer-details" class="viewer-details"></aside>
+    </div>
+    <footer class="legend">
+      <span><i class="swatch" style="--c: var(--ok)"></i>Éxito</span>
+      <span><i class="swatch" style="--c: var(--err)"></i>Fallo</span>
+      <span><i class="swatch" style="--c: var(--done)"></i>Al completar</span>
+      <span><i class="swatch" style="--c: var(--skip)"></i>Omitida</span>
+      <span><i class="badge-warn">!</i>Requiere revisión manual</span>
+    </footer>
+  </dialog>
+
+  <script src="/static/vendor/cytoscape.min.js"></script>
+  <script src="/static/vendor/elk.bundled.js"></script>
+  <script src="/static/vendor/cytoscape-elk.js"></script>
+  <script src="/static/diagram.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

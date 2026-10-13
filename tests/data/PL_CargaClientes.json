@@ -1,0 +1,117 @@
+{
+    "name": "PL_CargaClientes",
+    "properties": {
+        "description": "Auto-generated from SSIS package: samples/CargaClientes.dtsx. Review flagged activities before deploying.",
+        "activities": [
+            {
+                "name": "Obtener Fecha Corte",
+                "description": "",
+                "type": "Lookup",
+                "dependsOn": [],
+                "policy": {
+                    "timeout": "0.12:00:00",
+                    "retry": 0,
+                    "retryIntervalInSeconds": 30
+                },
+                "typeProperties": {
+                    "source": {
+                        "type": "AzureSqlSource",
+                        "sqlReaderQuery": "SELECT MAX(FechaCarga) AS FechaCorte FROM ctl.Cargas",
+                        "queryTimeout": "02:00:00"
+                    },
+                    "dataset": {
+                        "referenceName": "DS_Obtener_Fecha_Corte",
+                        "type": "DatasetReference"
+                    },
+                    "firstRowOnly": true
+                }
+            },
+            {
+                "name": "Limpiar Stage",
+                "description": "",
+                "type": "Script",
+                "dependsOn": [
+                    {
+                        "activity": "Obtener Fecha Corte",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureDW",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "scripts": [
+                        {
+                            "type": "Query",
+                            "text": "TRUNCATE TABLE stg.Clientes"
+                        }
+                    ],
+                    "logSettings": {
+                        "logDestination": "ActivityOutput"
+                    }
+                }
+            },
+            {
+                "name": "Cargar Clientes",
+                "description": "",
+                "type": "ExecuteDataFlow",
+                "dependsOn": [
+                    {
+                        "activity": "Limpiar Stage",
+                        "dependencyConditions": [
+                            "Succeeded"
+                        ]
+                    }
+                ],
+                "policy": {
+                    "timeout": "1.00:00:00",
+                    "retry": 2,
+                    "retryIntervalInSeconds": 60,
+                    "secureOutput": false,
+                    "secureInput": false
+                },
+                "typeProperties": {
+                    "dataflow": {
+                        "referenceName": "DF_Cargar_Clientes",
+                        "type": "DataFlowReference"
+                    },
+                    "compute": {
+                        "coreCount": 8,
+                        "computeType": "General"
+                    },
+                    "traceLevel": "None"
+                }
+            },
+            {
+                "name": "Registrar Error",
+                "description": "[MANUAL REVIEW] Depended on SSIS container 'Carga' with condition ['Failed']; it was rewired to the container's last activities ['Cargar Clientes']. ADF requires ALL listed dependencies to match and a failure earlier in the container leaves them 'Skipped', so verify the error path.",
+                "type": "SqlServerStoredProcedure",
+                "dependsOn": [
+                    {
+                        "activity": "Cargar Clientes",
+                        "dependencyConditions": [
+                            "Failed"
+                        ]
+                    }
+                ],
+                "linkedServiceName": {
+                    "referenceName": "LS_AzureDW",
+                    "type": "LinkedServiceReference"
+                },
+                "typeProperties": {
+                    "storedProcedureName": "RegistrarError",
+                    "storedProcedureParameters": {}
+                }
+            }
+        ],
+        "parameters": {},
+        "variables": {},
+        "annotations": [
+            "ssis-adf-agent",
+            "source-package:CargaClientes"
+        ]
+    }
+}

@@ -21,8 +21,15 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
   `validate_adf_artifacts`. `deploy_to_adf` no se ofrece al modelo.
 - **Rutas de la sesión**: carpeta de entrada y de salida (`az://contenedor/carpeta`), guardadas
   en el navegador y enviadas en cada petición.
-- **Paquetes**: lista los `.dtsx` de la entrada, permite subir nuevos y convertir con un clic.
-- **Artefactos**: lista los JSON generados y permite descargarlos.
+- **Paquetes**: lista los `.dtsx` de la entrada y permite subir nuevos. Los botones **Analizar**
+  y **Convertir** llaman al MCP directamente (sin IA, sin coste de tokens) y muestran el
+  resultado en una tarjeta: complejidad, artefactos generados, validación y avisos.
+- **Artefactos**: lista los JSON generados por paquete; se pueden descargar y, en los pipelines,
+  abrir el diagrama con **Ver flujo**.
+- **Diagrama del pipeline**: visor interactivo al estilo de ADF Studio (Cytoscape.js + ELK):
+  actividades con su tipo e icono, dependencias coloreadas por condición, contenedores
+  ForEach/Until/If/Switch anidados, panel de detalles (SQL, linked service, reintentos, JSON),
+  zoom y descarga en PNG. El chat también lo muestra cuando pides "muéstrame el flujo de …".
 
 **Seguridad:**
 - La API key del MCP y el acceso a Azure OpenAI y al Storage viven solo en el servidor.
@@ -38,6 +45,9 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
 | `app/llm.py` | Cliente de Azure OpenAI (API key o identidad administrada) |
 | `app/mcp_client.py` | Cliente MCP (Streamable HTTP + `X-API-Key`) |
 | `app/storage.py` | Subir, listar y descargar en Blob Storage |
+| `app/graph.py` | Pipeline ADF (JSON) → nodos y aristas para el diagrama |
+| `app/tools.py` | Herramientas propias de la web para el agente (artefactos y diagrama) |
+| `app/static/diagram.js` | Visor del diagrama; librerías en `app/static/vendor/` |
 | `app/static/` | Interfaz (HTML, CSS y JavaScript sin frameworks) |
 | `scripts/deploy_webapp.ps1` | Despliegue en App Service |
 

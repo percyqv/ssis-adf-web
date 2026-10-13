@@ -21,7 +21,8 @@ from pydantic import BaseModel, Field
 from .agent import Agent, ChatModel, SessionSettings
 from .config import Settings
 from .mcp_client import McpClient, McpError
-from .storage import Storage, StorageError
+from .storage import Storage, StorageError, parse_location
+from .tools import ToolError, build_local_tools, pipeline_graph
 
 log = logging.getLogger("ssis_adf_web")
 STATIC = Path(__file__).parent / "static"
@@ -36,6 +37,15 @@ class ChatRequest(BaseModel):
     messages: list[Message] = Field(min_length=1, max_length=40)
     input_location: str
     output_location: str
+
+
+class PackageAction(BaseModel):
+    package_path: str
+    output_location: str | None = None
+
+
+class ArtifactsAction(BaseModel):
+    artifacts_dir: str
 
 
 def create_app(
@@ -108,6 +118,10 @@ def create_app(
             allowed_tools=settings.allowed_tools,
             max_steps=settings.max_agent_steps,
             allowed_containers=settings.allowed_containers,
+            local_tools=(
+                build_local_tools(request.app.state.storage, session)
+                if request.app.state.storage is not None else None
+            ),
         )
         try:
             result = await agent.run([m.model_dump() for m in req.messages], session)
@@ -120,7 +134,63 @@ def create_app(
         return {
             "reply": result.reply,
             "steps": [s.__dict__ for s in result.steps],
+            "attachments": result.attachments,
         }
+
+    # ---- direct actions (no AI): call the MCP tools straight away -----------
+
+    def _check(path: str, what: str, *, file_suffix: str | None = None) -> str:
+        try:
+            loc = parse_location(path, settings.allowed_containers)
+        except StorageError as exc:
+            raise HTTPException(400, f"{what}: {exc}") from exc
+        if file_suffix and not loc.path.lower().endswith(file_suffix):
+            raise HTTPException(400, f"{what}: debe ser un archivo {file_suffix}")
+        return loc.uri()
+
+    async def _mcp_call(request: Request, tool: str, args: dict[str, Any]) -> Any:
+        mcp_ = _require(request.app.state.mcp, "MCP_URL / MCP_API_KEY")
+        try:
+            return await mcp_.call_tool(tool, args)
+        except McpError as exc:
+            raise HTTPException(502, str(exc)) from exc
+
+    @app.post("/api/actions/analyze")
+    async def action_analyze(body: PackageAction, request: Request) -> dict[str, Any]:
+        pkg = _check(body.package_path, "Paquete", file_suffix=".dtsx")
+        result = await _mcp_call(request, "analyze_ssis_package", {"package_path": pkg})
+        log.info("analyze user=%s package=%s", _current_user(request), pkg)
+        return {"analysis": result}
+
+    @app.post("/api/actions/convert")
+    async def action_convert(body: PackageAction, request: Request) -> dict[str, Any]:
+        pkg = _check(body.package_path, "Paquete", file_suffix=".dtsx")
+        out_base = _check(body.output_location or settings.default_output, "Salida")
+        name = pkg.rsplit("/", 1)[-1][: -len(".dtsx")]
+        out_dir = f"{out_base.rstrip('/')}/{name}"
+        convert = await _mcp_call(request, "convert_ssis_package",
+                                  {"package_path": pkg, "output_dir": out_dir})
+        validate = await _mcp_call(request, "validate_adf_artifacts",
+                                   {"artifacts_dir": out_dir})
+        log.info("convert user=%s package=%s", _current_user(request), pkg)
+        pipeline = convert.get("files", {}).get("pipeline") if isinstance(convert, dict) else None
+        return {"output_dir": out_dir, "convert": convert, "validate": validate,
+                "pipeline_path": pipeline}
+
+    @app.post("/api/actions/validate")
+    async def action_validate(body: ArtifactsAction, request: Request) -> dict[str, Any]:
+        folder = _check(body.artifacts_dir, "Carpeta")
+        return {"validate": await _mcp_call(request, "validate_adf_artifacts",
+                                            {"artifacts_dir": folder})}
+
+    @app.get("/api/pipeline-graph")
+    async def get_pipeline_graph(path: str, request: Request) -> dict[str, Any]:
+        storage_ = _require(request.app.state.storage, "AZURE_STORAGE_ACCOUNT")
+        _check(path, "Pipeline", file_suffix=".json")
+        try:
+            return await pipeline_graph(storage_, path)
+        except ToolError as exc:
+            raise HTTPException(400, str(exc)) from exc
 
     @app.get("/api/files")
     async def list_files(location: str, request: Request, suffix: str = "") -> dict[str, Any]:

@@ -59,6 +59,8 @@ class Storage:
         container = self._svc.get_container_client(loc.container)
         prefix = f"{loc.path}/" if loc.path else None
         items: list[dict[str, Any]] = []
+        if not await container.exists():
+            raise StorageError(f"El contenedor '{loc.container}' no existe")
         async for blob in container.list_blobs(name_starts_with=prefix, include=["metadata"]):
             md = blob.metadata or {}
             if str(md.get("hdi_isfolder", "")).lower() == "true" or blob.name.endswith("/"):
@@ -79,7 +81,10 @@ class Storage:
         if not name.lower().endswith(".dtsx") or not _NAME.match(name):
             raise StorageError("Solo se permiten archivos .dtsx con nombre simple")
         blob = loc.child(name)
-        await self._svc.get_blob_client(loc.container, blob).upload_blob(data, overwrite=True)
+        try:
+            await self._svc.get_blob_client(loc.container, blob).upload_blob(data, overwrite=True)
+        except ResourceNotFoundError as exc:
+            raise StorageError(f"El contenedor '{loc.container}' no existe") from exc
         return loc.uri(blob)
 
     async def download(self, path: str) -> tuple[str, bytes]:

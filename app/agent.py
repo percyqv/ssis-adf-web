@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -56,6 +57,29 @@ class ToolStep:
 class AgentResult:
     reply: str
     steps: list[ToolStep] = field(default_factory=list)
+    # Rich content for the UI (e.g. pipeline diagrams), never sent to the model
+    attachments: list[dict[str, Any]] = field(default_factory=list)
+
+
+@dataclass
+class LocalToolResult:
+    content: str  # what the model sees
+    summary: str  # one line for the "tools used" list
+    attachment: dict[str, Any] | None = None
+
+
+@dataclass
+class LocalTool:
+    """A tool implemented by the web app itself (no MCP round trip)."""
+
+    name: str
+    description: str
+    parameters: dict[str, Any]
+    handler: Callable[[dict[str, Any]], Awaitable[LocalToolResult]]
+
+
+class ToolError(Exception):
+    """Expected tool failure; the message is shown to the model."""
 
 
 def system_prompt(settings: SessionSettings) -> str:
@@ -77,6 +101,10 @@ Convenciones:
 - Al convertir P, usa output_dir "{out}/P" (una carpeta por paquete).
 - Después de convertir, valida siempre esa carpeta con validate_adf_artifacts.
 - No despliegues nada en Azure Data Factory.
+- Para ver qué artefactos existen usa list_artifacts; para leer uno, read_artifact.
+- Si piden ver, dibujar o explicar el flujo de un pipeline, usa get_pipeline_diagram
+  (con el nombre del paquete). La interfaz dibuja el diagrama automáticamente: NO escribas
+  diagramas en texto (Mermaid, ASCII); explica el flujo en pocas frases.
 
 Al responder:
 - Resume lo generado (pipelines, linked services, datasets, data flows, triggers).
@@ -119,7 +147,8 @@ def _summarize(result: Any) -> str:
 
 
 _PATH_ARGS = ("package_path", "output_dir", "artifacts_dir", "path_or_connection",
-              "esi_tables_path", "schema_remap_path", "shared_artifacts_dir")
+              "esi_tables_path", "schema_remap_path", "shared_artifacts_dir",
+              "path", "location")
 
 
 def _path_problem(args: dict[str, Any], allowed_containers: list[str]) -> str | None:
@@ -148,19 +177,27 @@ class Agent:
         allowed_tools: list[str],
         max_steps: int = 8,
         allowed_containers: list[str] | None = None,
+        local_tools: list[LocalTool] | None = None,
     ) -> None:
         self.model = model
         self.mcp = mcp
         self.allowed_tools = set(allowed_tools)
         self.max_steps = max_steps
         self.allowed_containers = allowed_containers or []
+        self.local_tools = {t.name: t for t in (local_tools or [])}
 
     async def run(
         self, conversation: list[dict[str, str]], settings: SessionSettings
     ) -> AgentResult:
-        tools = [t for t in await self.mcp.list_tools() if t.name in self.allowed_tools]
-        tool_schemas = [_tool_schema(t) for t in tools]
+        tools = [t for t in await self.mcp.list_tools()
+                 if t.name in self.allowed_tools and t.name not in self.local_tools]
+        tool_schemas = [_tool_schema(t) for t in tools] + [
+            {"type": "function", "function": {
+                "name": t.name, "description": t.description, "parameters": t.parameters}}
+            for t in self.local_tools.values()
+        ]
         allowed = {t.name for t in tools}
+        attachments: list[dict[str, Any]] = []
 
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": system_prompt(settings)}
@@ -174,7 +211,9 @@ class Agent:
             msg = await self.model.complete(messages, tool_schemas)
             calls = msg.get("tool_calls") or []
             if not calls:
-                return AgentResult(reply=msg.get("content") or "", steps=steps)
+                return AgentResult(
+                    reply=msg.get("content") or "", steps=steps, attachments=attachments
+                )
 
             messages.append(
                 {"role": "assistant", "content": msg.get("content"), "tool_calls": calls}
@@ -185,13 +224,25 @@ class Agent:
                     args = json.loads(call["function"].get("arguments") or "{}")
                 except ValueError:
                     args = {}
+                local = self.local_tools.get(name)
                 problem = (
-                    f"la herramienta '{name}' no está disponible" if name not in allowed
+                    f"la herramienta '{name}' no está disponible"
+                    if name not in allowed and local is None
                     else _path_problem(args, self.allowed_containers)
                 )
                 if problem:
                     content = f"Error: {problem}."
                     steps.append(ToolStep(name, args, False, problem))
+                elif local is not None:
+                    try:
+                        res = await local.handler(args)
+                        content = res.content
+                        steps.append(ToolStep(name, args, True, res.summary))
+                        if res.attachment:
+                            attachments.append(res.attachment)
+                    except ToolError as exc:
+                        content = f"Error: {exc}"
+                        steps.append(ToolStep(name, args, False, str(exc)[:300]))
                 else:
                     try:
                         result = await self.mcp.call_tool(name, args)
@@ -213,4 +264,5 @@ class Agent:
             reply="Me detuve porque la tarea necesitaba demasiados pasos. "
                   "Intenta pedirla por partes.",
             steps=steps,
+            attachments=attachments,
         )

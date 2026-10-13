@@ -1,0 +1,37 @@
+{
+  "name": "PL_Complejo",
+  "properties": {
+    "description": "Pipeline de prueba con contenedores",
+    "parameters": {"FechaCorte": {"type": "String"}},
+    "activities": [
+      {"name": "Listar Archivos", "type": "GetMetadata", "dependsOn": [],
+       "linkedServiceName": {"referenceName": "LS_Blob", "type": "LinkedServiceReference"},
+       "typeProperties": {"fieldList": ["childItems"]}},
+      {"name": "Por Cada Archivo", "type": "ForEach",
+       "dependsOn": [{"activity": "Listar Archivos", "dependencyConditions": ["Succeeded"]}],
+       "typeProperties": {"items": {"value": "@activity('Listar Archivos').output.childItems", "type": "Expression"},
+         "isSequential": true,
+         "activities": [
+           {"name": "Copiar Archivo", "type": "Copy", "dependsOn": [],
+            "inputs": [{"referenceName": "DS_Archivo", "type": "DatasetReference"}],
+            "outputs": [{"referenceName": "DS_Stage", "type": "DatasetReference"}],
+            "typeProperties": {"source": {"type": "DelimitedTextSource"}, "sink": {"type": "AzureSqlSink", "writeBehavior": "insert"}}},
+           {"name": "Marcar Procesado", "type": "Script",
+            "dependsOn": [{"activity": "Copiar Archivo", "dependencyConditions": ["Succeeded"]}],
+            "linkedServiceName": {"referenceName": "LS_DW", "type": "LinkedServiceReference"},
+            "typeProperties": {"scripts": [{"type": "NonQuery", "text": "UPDATE ctl.Archivos SET Estado = 1"}]}}
+         ]}},
+      {"name": "Hay Errores", "type": "IfCondition",
+       "dependsOn": [{"activity": "Por Cada Archivo", "dependencyConditions": ["Completed"]}],
+       "typeProperties": {"expression": {"value": "@greater(variables('errores'), 0)", "type": "Expression"},
+         "ifTrueActivities": [{"name": "Notificar", "type": "WebActivity", "dependsOn": [],
+            "description": "[MANUAL REVIEW] Configure the Logic App URL.",
+            "typeProperties": {"method": "POST", "url": "@pipeline().parameters.SendMailFunctionUrl"}}],
+         "ifFalseActivities": [{"name": "Esperar", "type": "Wait", "dependsOn": [], "typeProperties": {"waitTimeInSeconds": 1}}]}},
+      {"name": "Registrar Fin", "type": "SqlServerStoredProcedure",
+       "dependsOn": [{"activity": "Hay Errores", "dependencyConditions": ["Succeeded", "Failed"]}],
+       "linkedServiceName": {"referenceName": "LS_DW", "type": "LinkedServiceReference"},
+       "typeProperties": {"storedProcedureName": "ctl.RegistrarFin"}}
+    ]
+  }
+}

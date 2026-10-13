@@ -191,15 +191,30 @@ $root = (Get-Location).Path
 $zipPath = Join-Path $env:TEMP "ssis-adf-web.zip"
 $count = New-DeployZip $root $zipPath
 Write-Host "Paquete: $count archivos"
-Invoke-Az webapp deploy -n $WebAppName -g $AppRg --src-path $zipPath --type zip `
-    --track-status false -o none
+# --async: no esperar a que termine la instalacion de dependencias (en planes pequenos
+# supera el limite de ~4 min de la peticion y da "504 GatewayTimeout" aunque el
+# despliegue siga bien). El estado se comprueba despues con /healthz.
+$ErrorActionPreference = "Continue"
+$deployOut = & az webapp deploy -n $WebAppName -g $AppRg --src-path $zipPath --type zip `
+    --async true -o none 2>&1
+$deployCode = $LASTEXITCODE
+$ErrorActionPreference = "Stop"
 Remove-Item $zipPath -ErrorAction SilentlyContinue
+if ($deployCode -ne 0) {
+    if (($deployOut | Out-String) -match '504|GatewayTimeout|timed out') {
+        Write-Host "La subida tardo mas de lo esperado (504); el despliegue continua en Azure." -ForegroundColor Yellow
+    } else {
+        $deployOut | Out-Host
+        throw "Fallo la publicacion del codigo. Revisa: az webapp log deployment show -n $WebAppName -g $AppRg"
+    }
+}
 
 # ---------------------------------------------------------------------------
 $url = "https://$WebAppName.azurewebsites.net"
-Write-Step "Comprobando $url/healthz (el primer arranque tarda unos minutos)"
+Write-Step "Esperando a que la web arranque: $url/healthz (instalar dependencias tarda 5-10 minutos)"
 $ok = $false
-for ($i = 1; $i -le 40 -and -not $ok; $i++) {
+for ($i = 1; $i -le 60 -and -not $ok; $i++) {
+    if ($i % 4 -eq 0) { Write-Host "  ...esperando ($([int]($i * 15 / 60)) min)" }
     try {
         $h = Invoke-RestMethod "$url/healthz" -TimeoutSec 15
         if ($h.status -eq "ok") { $ok = $true }
@@ -213,7 +228,8 @@ if ($ok) {
         Write-Host "Falta configurar: $($h.missing_settings -join ', ')" -ForegroundColor Yellow
     }
 } else {
-    Write-Host "La web no respondio todavia. Revisa los logs con:" -ForegroundColor Yellow
+    Write-Host "La web no respondio todavia. Revisa:" -ForegroundColor Yellow
+    Write-Host "  az webapp log deployment show -n $WebAppName -g $AppRg --query `"[-5:].message`" -o tsv"
     Write-Host "  az webapp log tail -n $WebAppName -g $AppRg"
 }
 Write-Host ""

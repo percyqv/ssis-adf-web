@@ -130,8 +130,14 @@ Write-Host "Endpoint: $($oai.endpoint)  Despliegue: $OpenAIDeployment"
 $AppRg = if ($PlanResourceGroup) { $PlanResourceGroup } else { $ResourceGroup }
 if (Test-Az appservice plan show -n $PlanName -g $AppRg) {
     $plan = (Invoke-Az appservice plan show -n $PlanName -g $AppRg -o json) -join "`n" | ConvertFrom-Json
-    if (-not $plan.reserved) { throw "El plan '$PlanName' es de Windows; esta web necesita un plan Linux." }
-    Write-Step "Usando el plan existente $PlanName ($($plan.sku.name), $($plan.location)) - sin coste adicional"
+    # Segun la version de la CLI, "reserved" (= Linux) viene arriba o dentro de "properties".
+    $planIsLinux = ($plan.kind -match 'linux') -or ($plan.reserved -eq $true) -or
+               ($plan.properties -and $plan.properties.reserved -eq $true)
+    $planSku = if ($plan.sku) { $plan.sku.name } else { "?" }
+    if (-not $planIsLinux) {
+        throw "El plan '$PlanName' no es Linux (kind='$($plan.kind)'); esta web necesita un plan Linux."
+    }
+    Write-Step "Usando el plan existente $PlanName ($planSku, $($plan.location)) - sin coste adicional"
 } else {
     if ($PlanResourceGroup) { throw "No existe el plan '$PlanName' en el grupo '$PlanResourceGroup'." }
     Write-Step "Creando App Service Plan $PlanName ($Sku, Linux, $Location)"

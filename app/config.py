@@ -18,7 +18,7 @@ class Settings:
     # Azure OpenAI (or Azure AI Foundry) chat model
     openai_endpoint: str = ""
     openai_deployment: str = ""
-    openai_api_version: str = "2024-10-21"
+    openai_api_version: str = "v1"  # Azure OpenAI v1 API; or a date for the classic API
     openai_api_key: str = ""  # empty → Microsoft Entra ID (managed identity / az login)
 
     # Storage Account used for direct upload / list / download
@@ -42,7 +42,7 @@ class Settings:
             mcp_api_key=env("MCP_API_KEY", ""),
             openai_endpoint=env("AZURE_OPENAI_ENDPOINT", ""),
             openai_deployment=env("AZURE_OPENAI_DEPLOYMENT", ""),
-            openai_api_version=env("AZURE_OPENAI_API_VERSION", "2024-10-21"),
+            openai_api_version=env("AZURE_OPENAI_API_VERSION", "v1"),
             openai_api_key=env("AZURE_OPENAI_API_KEY", ""),
             storage_account=env("AZURE_STORAGE_ACCOUNT", ""),
             allowed_containers=_list(env("ALLOWED_CONTAINERS"), "ssis-packages,adf-artifacts"),

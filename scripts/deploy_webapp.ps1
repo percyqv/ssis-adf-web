@@ -13,14 +13,14 @@
     Ejecutar desde la carpeta raiz del repositorio, con "az login" hecho.
 
 .EXAMPLE
-    .\scripts\deploy_webapp.ps1 -OpenAIResource mi-recurso-openai -OpenAIDeployment gpt-4o
+    .\scripts\deploy_webapp.ps1 -OpenAIResource FoundryLabInetum -OpenAIDeployment gpt-5.4-mini
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
     [string] $OpenAIResource,                 # nombre del recurso Azure OpenAI / Foundry
     [Parameter(Mandatory = $true)]
-    [string] $OpenAIDeployment,               # nombre del despliegue del modelo (p. ej. gpt-4o)
+    [string] $OpenAIDeployment,               # nombre de la implementacion (p. ej. gpt-5.4-mini)
     [string] $OpenAIResourceGroup = "",       # por defecto, se busca en la suscripcion
 
     [ValidatePattern('^[a-zA-Z0-9-]{2,60}$')]
@@ -104,8 +104,12 @@ if (-not $OpenAIResourceGroup) {
         --query "[?name=='$OpenAIResource'].resourceGroup | [0]" -o tsv
     if (-not $OpenAIResourceGroup) { throw "No encuentro el recurso '$OpenAIResource' en la suscripcion." }
 }
-$oai = Invoke-Az cognitiveservices account show -n $OpenAIResource -g $OpenAIResourceGroup `
-    --query "{id:id, endpoint:properties.endpoint}" -o json | ConvertFrom-Json
+$acct = (Invoke-Az cognitiveservices account show -n $OpenAIResource -g $OpenAIResourceGroup -o json) `
+    -join "`n" | ConvertFrom-Json
+# Recursos Foundry / AI Services exponen un endpoint especifico de OpenAI
+$oaiEndpoint = $acct.properties.endpoints.'OpenAI Language Model Instance API'
+if (-not $oaiEndpoint) { $oaiEndpoint = $acct.properties.endpoint }
+$oai = @{ id = $acct.id; endpoint = $oaiEndpoint }
 if (-not (Test-Az cognitiveservices account deployment show -n $OpenAIResource -g $OpenAIResourceGroup `
         --deployment-name $OpenAIDeployment)) {
     Write-Host "Despliegues disponibles en ${OpenAIResource}:" -ForegroundColor Yellow
@@ -138,6 +142,7 @@ Invoke-Az webapp config appsettings set -n $WebAppName -g $ResourceGroup -o none
     "MCP_API_KEY=$mcpKey" `
     "AZURE_OPENAI_ENDPOINT=$($oai.endpoint)" `
     "AZURE_OPENAI_DEPLOYMENT=$OpenAIDeployment" `
+    "AZURE_OPENAI_API_VERSION=v1" `
     "AZURE_STORAGE_ACCOUNT=$StorageAccount" `
     "DEFAULT_INPUT=$DefaultInput" `
     "DEFAULT_OUTPUT=$DefaultOutput" `

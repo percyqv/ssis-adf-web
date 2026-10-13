@@ -45,7 +45,7 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
 
 Requisitos: Azure CLI con `az login`, el MCP ya desplegado (`ssis-adf-agent`) y un recurso de
 **Azure OpenAI / Foundry** con un modelo desplegado que admita *function calling*
-(por ejemplo `gpt-4o` o `gpt-4.1`).
+con la etiqueta *Finalización de chat* (por ejemplo `gpt-5.4-mini` o `gpt-4.1-mini`).
 
 1. Averigua el nombre del recurso y del despliegue del modelo:
    ```powershell
@@ -90,7 +90,7 @@ los roles *Cognitive Services OpenAI User* y *Storage Blob Data Contributor*).
 | `MCP_URL`, `MCP_API_KEY` | Servidor MCP y su API key |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | Modelo de IA |
 | `AZURE_OPENAI_API_KEY` | Opcional; vacío = identidad administrada / `az login` |
-| `AZURE_OPENAI_API_VERSION` | Por defecto `2024-10-21` |
+| `AZURE_OPENAI_API_VERSION` | Por defecto `v1` (API v1 de Azure OpenAI); o una fecha, p. ej. `2024-10-21` |
 | `AZURE_STORAGE_ACCOUNT` | Storage de paquetes y artefactos |
 | `ALLOWED_CONTAINERS` | Por defecto `ssis-packages,adf-artifacts` |
 | `DEFAULT_INPUT`, `DEFAULT_OUTPUT` | Rutas iniciales del panel |

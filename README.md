@@ -90,6 +90,7 @@ los roles *Cognitive Services OpenAI User* y *Storage Blob Data Contributor*).
 | `MCP_URL`, `MCP_API_KEY` | Servidor MCP y su API key |
 | `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_DEPLOYMENT` | Modelo de IA |
 | `AZURE_OPENAI_API_KEY` | Opcional; vacío = identidad administrada / `az login` |
+| `AZURE_OPENAI_TOKEN_SCOPE` | Opcional; por defecto según el endpoint (`ai.azure.com` para `*.services.ai.azure.com`, si no `cognitiveservices.azure.com`) |
 | `AZURE_OPENAI_API_VERSION` | Por defecto `v1` (API v1 de Azure OpenAI); o una fecha, p. ej. `2024-10-21` |
 | `AZURE_STORAGE_ACCOUNT` | Storage de paquetes y artefactos |
 | `ALLOWED_CONTAINERS` | Por defecto `ssis-packages,adf-artifacts` |

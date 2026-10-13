@@ -244,3 +244,11 @@ def test_agent_class_is_usable_directly() -> None:
     agent = Agent(model, FakeMcp(), SETTINGS.allowed_tools)
     res = asyncio.run(agent.run([{"role": "user", "content": "hola"}], SessionSettings(**SESSION)))
     assert res.reply == "hola" and res.steps == []
+
+
+def test_token_scope_by_endpoint() -> None:
+    from app.llm import token_scope
+
+    assert token_scope("https://x.services.ai.azure.com") == "https://ai.azure.com/.default"
+    assert token_scope("https://x.openai.azure.com") == "https://cognitiveservices.azure.com/.default"
+    assert token_scope("https://x.cognitiveservices.azure.com", "custom") == "custom"

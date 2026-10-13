@@ -1,0 +1,9 @@
+fastapi>=0.115,<1
+uvicorn[standard]>=0.30
+gunicorn>=22
+mcp>=1.30,<2
+openai>=1.50
+azure-identity>=1.17
+azure-storage-blob>=12.19
+aiohttp>=3.9  # async transport for azure-storage-blob / azure-identity aio
+python-multipart>=0.0.9

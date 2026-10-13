@@ -1,0 +1,192 @@
+"""
+SSIS → ADF web assistant.
+
+Run locally:   uvicorn app.main:app --reload
+App Service:   gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:8000 app.main:app
+"""
+from __future__ import annotations
+
+import base64
+import json
+import logging
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any
+
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field
+
+from .agent import Agent, ChatModel, SessionSettings
+from .config import Settings
+from .mcp_client import McpClient, McpError
+from .storage import Storage, StorageError
+
+log = logging.getLogger("ssis_adf_web")
+STATIC = Path(__file__).parent / "static"
+
+
+class Message(BaseModel):
+    role: str
+    content: str
+
+
+class ChatRequest(BaseModel):
+    messages: list[Message] = Field(min_length=1, max_length=40)
+    input_location: str
+    output_location: str
+
+
+def create_app(
+    settings: Settings | None = None,
+    model: ChatModel | None = None,
+    mcp: McpClient | None = None,
+    storage: Storage | None = None,
+) -> FastAPI:
+    settings = settings or Settings.from_env()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        app.state.settings = settings
+        app.state.mcp = mcp or (
+            McpClient(settings.mcp_url, settings.mcp_api_key) if settings.mcp_url else None
+        )
+        if model is not None:
+            app.state.model = model
+        elif settings.openai_endpoint and settings.openai_deployment:
+            from .llm import AzureOpenAIModel
+
+            app.state.model = AzureOpenAIModel(settings)
+        else:
+            app.state.model = None
+        app.state.storage = storage or (
+            Storage(settings.storage_account, settings.allowed_containers)
+            if settings.storage_account else None
+        )
+        if settings.missing():
+            log.warning("Configuración incompleta: %s", ", ".join(settings.missing()))
+        yield
+        if app.state.storage is not None:
+            await app.state.storage.close()
+
+    app = FastAPI(title="SSIS → ADF", lifespan=lifespan, docs_url=None, redoc_url=None)
+
+    def _require(component: Any, name: str) -> Any:
+        if component is None:
+            raise HTTPException(503, f"El servidor no tiene configurado: {name}")
+        return component
+
+    @app.get("/")
+    async def index() -> FileResponse:
+        return FileResponse(STATIC / "index.html")
+
+    @app.get("/healthz")
+    async def healthz() -> dict[str, Any]:
+        return {"status": "ok", "missing_settings": settings.missing()}
+
+    @app.get("/api/config")
+    async def config(request: Request) -> dict[str, Any]:
+        return {
+            "user": _current_user(request),
+            "default_input": settings.default_input,
+            "default_output": settings.default_output,
+            "allowed_containers": settings.allowed_containers,
+            "missing_settings": settings.missing(),
+        }
+
+    @app.post("/api/chat")
+    async def chat(req: ChatRequest, request: Request) -> dict[str, Any]:
+        session = SessionSettings(req.input_location.strip(), req.output_location.strip())
+        try:
+            session.validate(settings.allowed_containers)
+        except ValueError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        agent = Agent(
+            model=_require(request.app.state.model, "AZURE_OPENAI_ENDPOINT / DEPLOYMENT"),
+            mcp=_require(request.app.state.mcp, "MCP_URL / MCP_API_KEY"),
+            allowed_tools=settings.allowed_tools,
+            max_steps=settings.max_agent_steps,
+            allowed_containers=settings.allowed_containers,
+        )
+        try:
+            result = await agent.run([m.model_dump() for m in req.messages], session)
+        except McpError as exc:
+            raise HTTPException(502, f"Error del servidor MCP: {exc}") from exc
+        except Exception as exc:  # LLM / network errors
+            log.exception("Fallo en el agente")
+            raise HTTPException(502, f"No se pudo completar la petición: {exc}") from exc
+        log.info("chat user=%s steps=%s", _current_user(request), [s.tool for s in result.steps])
+        return {
+            "reply": result.reply,
+            "steps": [s.__dict__ for s in result.steps],
+        }
+
+    @app.get("/api/files")
+    async def list_files(location: str, request: Request, suffix: str = "") -> dict[str, Any]:
+        storage_ = _require(request.app.state.storage, "AZURE_STORAGE_ACCOUNT")
+        try:
+            return {"items": await storage_.list(location, suffix)}
+        except StorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+
+    @app.post("/api/upload")
+    async def upload(
+        request: Request,
+        location: str = Form(...),
+        file: UploadFile = File(...),
+    ) -> dict[str, Any]:
+        storage_ = _require(request.app.state.storage, "AZURE_STORAGE_ACCOUNT")
+        data = await file.read(settings.max_upload_mb * 1024 * 1024 + 1)
+        if len(data) > settings.max_upload_mb * 1024 * 1024:
+            raise HTTPException(413, f"El archivo supera {settings.max_upload_mb} MB")
+        try:
+            path = await storage_.upload(location, file.filename or "", data)
+        except StorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info("upload user=%s path=%s", _current_user(request), path)
+        return {"path": path}
+
+    @app.get("/api/download")
+    async def download(path: str, request: Request) -> Response:
+        storage_ = _require(request.app.state.storage, "AZURE_STORAGE_ACCOUNT")
+        try:
+            name, data = await storage_.download(path)
+        except StorageError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        media = "application/json" if name.endswith(".json") else "application/octet-stream"
+        return Response(
+            data, media_type=media,
+            headers={"Content-Disposition": f'attachment; filename="{name}"'},
+        )
+
+    @app.exception_handler(HTTPException)
+    async def http_error(_: Request, exc: HTTPException) -> JSONResponse:
+        return JSONResponse({"error": exc.detail}, status_code=exc.status_code)
+
+    app.mount("/static", StaticFiles(directory=STATIC), name="static")
+    return app
+
+
+def _current_user(request: Request) -> str | None:
+    """User signed in through App Service Authentication (Easy Auth), if enabled."""
+    name = request.headers.get("x-ms-client-principal-name")
+    if name:
+        return name
+    principal = request.headers.get("x-ms-client-principal")
+    if principal:
+        try:
+            claims = json.loads(base64.b64decode(principal))
+            for c in claims.get("claims", []):
+                if c.get("typ") in ("name", "preferred_username"):
+                    return c.get("val")
+        except (ValueError, TypeError):
+            return None
+    return None
+
+
+logging.basicConfig(level=logging.INFO)
+# The Azure SDK logs every HTTP request at INFO; keep the App Service log readable.
+logging.getLogger("azure").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+app = create_app()

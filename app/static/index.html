@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>SSIS → ADF</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">⇄</span> SSIS <span class="arrow">→</span> ADF</div>
+    <div class="user" id="user"></div>
+  </header>
+
+  <div id="config-warning" class="banner" hidden></div>
+
+  <main class="layout">
+    <aside class="panel">
+      <section>
+        <h2>Rutas de la sesión</h2>
+        <label for="input-location">Entrada (paquetes .dtsx)</label>
+        <input id="input-location" spellcheck="false" placeholder="az://ssis-packages/Finanzas">
+        <label for="output-location">Salida (artefactos ADF)</label>
+        <input id="output-location" spellcheck="false" placeholder="az://adf-artifacts/Finanzas">
+        <button id="save-settings" class="secondary">Guardar rutas</button>
+        <p class="hint" id="settings-status"></p>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Paquetes</h2>
+          <button class="icon" id="refresh-packages" title="Actualizar">↻</button>
+        </div>
+        <ul id="packages" class="files"></ul>
+        <label class="upload">
+          <input type="file" id="upload-file" accept=".dtsx" multiple hidden>
+          <span>＋ Subir .dtsx</span>
+        </label>
+      </section>
+
+      <section>
+        <div class="section-head">
+          <h2>Artefactos generados</h2>
+          <button class="icon" id="refresh-artifacts" title="Actualizar">↻</button>
+        </div>
+        <ul id="artifacts" class="files"></ul>
+      </section>
+    </aside>
+
+    <section class="chat">
+      <div id="messages" class="messages">
+        <div class="welcome">
+          <h1>Asistente de migración SSIS → ADF</h1>
+          <p>Configura las rutas a la izquierda y pídeme lo que necesites.</p>
+          <div class="chips">
+            <button class="chip">¿Qué paquetes hay en la carpeta de entrada?</button>
+            <button class="chip">Analiza la complejidad de todos los paquetes</button>
+            <button class="chip">Convierte todos los paquetes y valida el resultado</button>
+          </div>
+        </div>
+      </div>
+      <form id="composer" class="composer">
+        <textarea id="prompt" rows="1" placeholder="Escribe tu petición… (Enter para enviar, Mayús+Enter para nueva línea)"></textarea>
+        <button type="submit" id="send">Enviar</button>
+      </form>
+    </section>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

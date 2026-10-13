@@ -14,6 +14,11 @@
 
 .EXAMPLE
     .\scripts\deploy_webapp.ps1 -OpenAIResource FoundryLabInetum -OpenAIDeployment gpt-5.4-mini
+
+.EXAMPLE
+    # Reutilizar un plan Linux existente (sin coste adicional)
+    .\scripts\deploy_webapp.ps1 -OpenAIResource FoundryLabInetum -OpenAIDeployment gpt-5.4-mini `
+        -PlanName ASP-IAData01Lab-a9a3 -PlanResourceGroup IA-Data-01-Lab
 #>
 [CmdletBinding()]
 param(
@@ -26,6 +31,7 @@ param(
     [ValidatePattern('^[a-zA-Z0-9-]{2,60}$')]
     [string] $WebAppName      = "ssis-adf-web-lab01",   # unico global -> <nombre>.azurewebsites.net
     [string] $PlanName        = "asp-ssis-adf-web",
+    [string] $PlanResourceGroup = "",                   # plan existente en otro grupo (la web se crea ahi)
     [string] $Sku             = "B1",
     [string] $ResourceGroup   = "Siss2adfLab",
     [string] $Location        = "eastus",
@@ -120,24 +126,31 @@ if (-not (Test-Az cognitiveservices account deployment show -n $OpenAIResource -
 Write-Host "Endpoint: $($oai.endpoint)  Despliegue: $OpenAIDeployment"
 
 # ---------------------------------------------------------------------------
-Write-Step "App Service Plan $PlanName ($Sku, Linux)"
-if (-not (Test-Az appservice plan show -n $PlanName -g $ResourceGroup)) {
-    Invoke-Az appservice plan create -n $PlanName -g $ResourceGroup -l $Location `
+# La web se crea en el mismo grupo que su plan.
+$AppRg = if ($PlanResourceGroup) { $PlanResourceGroup } else { $ResourceGroup }
+if (Test-Az appservice plan show -n $PlanName -g $AppRg) {
+    $plan = (Invoke-Az appservice plan show -n $PlanName -g $AppRg -o json) -join "`n" | ConvertFrom-Json
+    if (-not $plan.reserved) { throw "El plan '$PlanName' es de Windows; esta web necesita un plan Linux." }
+    Write-Step "Usando el plan existente $PlanName ($($plan.sku.name), $($plan.location)) - sin coste adicional"
+} else {
+    if ($PlanResourceGroup) { throw "No existe el plan '$PlanName' en el grupo '$PlanResourceGroup'." }
+    Write-Step "Creando App Service Plan $PlanName ($Sku, Linux, $Location)"
+    Invoke-Az appservice plan create -n $PlanName -g $AppRg -l $Location `
         --is-linux --sku $Sku -o none
 }
 
 Write-Step "Web App $WebAppName"
-if (-not (Test-Az webapp show -n $WebAppName -g $ResourceGroup)) {
-    Invoke-Az webapp create -n $WebAppName -g $ResourceGroup -p $PlanName `
+if (-not (Test-Az webapp show -n $WebAppName -g $AppRg)) {
+    Invoke-Az webapp create -n $WebAppName -g $AppRg -p $PlanName `
         --runtime "PYTHON:3.12" --https-only true -o none
 }
-Invoke-Az webapp identity assign -n $WebAppName -g $ResourceGroup -o none
-$principal = Invoke-Az webapp identity show -n $WebAppName -g $ResourceGroup --query principalId -o tsv
+Invoke-Az webapp identity assign -n $WebAppName -g $AppRg -o none
+$principal = Invoke-Az webapp identity show -n $WebAppName -g $AppRg --query principalId -o tsv
 
-Invoke-Az webapp config set -n $WebAppName -g $ResourceGroup --always-on true --ftps-state Disabled `
+Invoke-Az webapp config set -n $WebAppName -g $AppRg --always-on true --ftps-state Disabled `
     --startup-file "gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:8000 --timeout 300 app.main:app" `
     -o none
-Invoke-Az webapp config appsettings set -n $WebAppName -g $ResourceGroup -o none --settings `
+Invoke-Az webapp config appsettings set -n $WebAppName -g $AppRg -o none --settings `
     "MCP_URL=$mcpUrl" `
     "MCP_API_KEY=$mcpKey" `
     "AZURE_OPENAI_ENDPOINT=$($oai.endpoint)" `
@@ -172,7 +185,7 @@ $root = (Get-Location).Path
 $zipPath = Join-Path $env:TEMP "ssis-adf-web.zip"
 $count = New-DeployZip $root $zipPath
 Write-Host "Paquete: $count archivos"
-Invoke-Az webapp deploy -n $WebAppName -g $ResourceGroup --src-path $zipPath --type zip `
+Invoke-Az webapp deploy -n $WebAppName -g $AppRg --src-path $zipPath --type zip `
     --track-status false -o none
 Remove-Item $zipPath -ErrorAction SilentlyContinue
 
@@ -195,7 +208,7 @@ if ($ok) {
     }
 } else {
     Write-Host "La web no respondio todavia. Revisa los logs con:" -ForegroundColor Yellow
-    Write-Host "  az webapp log tail -n $WebAppName -g $ResourceGroup"
+    Write-Host "  az webapp log tail -n $WebAppName -g $AppRg"
 }
 Write-Host ""
 Write-Host "IMPORTANTE: activa el inicio de sesion antes de compartir la URL." -ForegroundColor Yellow

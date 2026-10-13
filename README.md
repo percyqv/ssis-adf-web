@@ -65,6 +65,14 @@ con la etiqueta *Finalización de chat* (por ejemplo `gpt-5.4-mini` o `gpt-4.1-m
    aplicación nuevo, *Restrict access: Require authentication* → **Add**.
    Hasta hacerlo, la web es pública.
 
+**Sin coste adicional:** si ya tienes un plan **Linux** de App Service, puedes desplegar la web
+en él (en vez de crear otro):
+```powershell
+.\scripts\deploy_webapp.ps1 -OpenAIResource <recurso> -OpenAIDeployment <despliegue> `
+    -PlanName <plan-existente> -PlanResourceGroup <grupo-del-plan>
+```
+La web se crea en el grupo y la región del plan.
+
 Valores por defecto del script: suscripción `Inetum-Lab`, grupo `Siss2adfLab`, región `eastus`,
 Storage `stsiss2adflab01`, web `ssis-adf-web-lab01` (debe ser único en Azure; cámbialo con
 `-WebAppName` si está ocupado).

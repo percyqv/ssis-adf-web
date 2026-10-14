@@ -22,7 +22,7 @@ Navegador (Easy Auth, Entra ID)
          └─► SQLite /home/data/ssis-adf-web/prompts.db      ← versiones de los prompts
 ```
 
-El servidor MCP está en otro repo: `percyqv/ssis_adf_agent` (rama `feat/azure-blob-http`).
+El servidor MCP está en otro repo: `percyqv/ssis_adf_agent` (rama `main`).
 
 ## Estructura
 

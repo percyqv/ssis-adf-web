@@ -7,31 +7,26 @@ Two prompts make up the system message:
   factory version (``FACTORY_BASE``) that can always be restored.
 * ``extra`` – additional instructions (tone, scope, company rules). Factory: empty.
 
-Each prompt is stored as one JSON document in Blob Storage
-(``<container>/prompts/<kind>.json``) holding its version history and which
-version is active. Saving creates a new version; any version — or the factory
-one — can be activated again. Security rules (allowed containers, no deploy)
-are enforced in code, so no prompt can switch them off.
+Versions live in a SQLite database (one file). On App Service it is kept under
+``/home/data``, which survives restarts and redeploys. Saving creates a new
+version; any version — or the factory one — can be activated again. Security
+rules (allowed containers, no deploy) are enforced in code, so no prompt can
+switch them off.
 """
 from __future__ import annotations
 
-import json
-import time
+import asyncio
+import os
+import sqlite3
 from datetime import UTC, datetime
-from typing import Any, Protocol
-
-from azure.core.exceptions import (
-    ResourceExistsError,
-    ResourceModifiedError,
-    ResourceNotFoundError,
-)
+from pathlib import Path
+from typing import Any
 
 KINDS = ("base", "extra")
 FACTORY_ID = "factory"
 PLACEHOLDERS = ("{{ENTRADA}}", "{{SALIDA}}")
 MAX_CHARS = 20_000
 MAX_VERSIONS = 50
-CACHE_SECONDS = 30
 
 FACTORY_BASE = """Eres un asistente experto en migrar paquetes SSIS a Azure Data Factory (ADF).
 Respondes en español, de forma breve y clara.
@@ -81,136 +76,118 @@ def _now() -> str:
     return datetime.now(UTC).isoformat(timespec="seconds")
 
 
-# ---------------------------------------------------------------- backends
-
-class Conflict(Exception):
-    """The document changed since it was read (optimistic concurrency)."""
-
-
-class Backend(Protocol):
-    async def get(self, name: str) -> tuple[bytes | None, str | None]: ...
-    async def put(self, name: str, data: bytes, etag: str | None) -> None: ...
+def default_db_path() -> str:
+    """/home persists on App Service (Linux); locally use ./data."""
+    if os.environ.get("PROMPTS_DB"):
+        return os.environ["PROMPTS_DB"]
+    if os.environ.get("WEBSITE_SITE_NAME"):  # running on App Service
+        return "/home/data/ssis-adf-web/prompts.db"
+    return str(Path("data") / "prompts.db")
 
 
-class MemoryBackend:
-    """In-process storage for local runs and tests."""
+_SCHEMA = """
+CREATE TABLE IF NOT EXISTS prompt_version (
+    kind    TEXT NOT NULL,
+    number  INTEGER NOT NULL,
+    text    TEXT NOT NULL,
+    note    TEXT NOT NULL DEFAULT '',
+    author  TEXT,
+    created TEXT NOT NULL,
+    PRIMARY KEY (kind, number)
+);
+CREATE TABLE IF NOT EXISTS prompt_active (
+    kind         TEXT PRIMARY KEY,
+    version      TEXT NOT NULL,          -- 'v<number>' or 'factory'
+    activated_by TEXT,
+    activated_at TEXT NOT NULL
+);
+"""
 
-    def __init__(self) -> None:
-        self.docs: dict[str, tuple[bytes, str]] = {}
-        self._n = 0
-
-    async def get(self, name: str) -> tuple[bytes | None, str | None]:
-        data, etag = self.docs.get(name, (None, None))
-        return data, etag
-
-    async def put(self, name: str, data: bytes, etag: str | None) -> None:
-        current = self.docs.get(name, (None, None))[1]
-        if current != etag:
-            raise Conflict(name)
-        self._n += 1
-        self.docs[name] = (data, str(self._n))
-
-
-class BlobBackend:
-    """One blob per prompt in a dedicated container (created on first save)."""
-
-    def __init__(self, service: Any, container: str) -> None:
-        self.container = service.get_container_client(container)
-
-    async def get(self, name: str) -> tuple[bytes | None, str | None]:
-        try:
-            stream = await self.container.get_blob_client(name).download_blob()
-            return await stream.readall(), stream.properties.etag
-        except ResourceNotFoundError:
-            return None, None
-
-    async def put(self, name: str, data: bytes, etag: str | None) -> None:
-        from azure.core import MatchConditions
-
-        blob = self.container.get_blob_client(name)
-        kwargs: dict[str, Any] = (
-            {"etag": etag, "match_condition": MatchConditions.IfNotModified} if etag
-            else {"match_condition": MatchConditions.IfMissing}
-        )
-        for attempt in (1, 2):
-            try:
-                await blob.upload_blob(data, overwrite=True, **kwargs)
-                return
-            except (ResourceModifiedError, ResourceExistsError) as exc:
-                raise Conflict(name) from exc
-            except ResourceNotFoundError:
-                if attempt == 2:
-                    raise
-                try:
-                    await self.container.create_container()
-                except ResourceExistsError:
-                    pass
-
-
-# ---------------------------------------------------------------- store
 
 class PromptStore:
-    def __init__(self, backend: Backend) -> None:
-        self.backend = backend
-        self._cache: tuple[float, tuple[str, str]] | None = None
+    """Prompt versions in SQLite. Calls run in a thread so they never block the event loop."""
 
-    @staticmethod
-    def _name(kind: str) -> str:
-        return f"prompts/{kind}.json"
+    def __init__(self, path: str) -> None:
+        self.path = path
+        if path != ":memory:":
+            Path(path).parent.mkdir(parents=True, exist_ok=True)
+        # One shared connection; a lock serialises access (the app runs one process).
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._db.row_factory = sqlite3.Row
+        # /home on App Service is a network share: no WAL there (it needs shared memory).
+        self._db.execute("PRAGMA journal_mode=DELETE")
+        self._db.execute("PRAGMA busy_timeout=5000")
+        self._db.executescript(_SCHEMA)
+        self._lock = asyncio.Lock()
+
+    def close(self) -> None:
+        self._db.close()
+
+    async def _run(self, fn, *args):
+        async with self._lock:
+            return await asyncio.to_thread(fn, *args)
 
     @staticmethod
     def _check_kind(kind: str) -> None:
         if kind not in KINDS:
             raise PromptError(f"Prompt desconocido: {kind}")
 
-    async def _read(self, kind: str) -> tuple[dict[str, Any], str | None]:
-        data, etag = await self.backend.get(self._name(kind))
-        if data is None:
-            return {"active": FACTORY_ID, "activated_by": None, "activated_at": None,
-                    "versions": []}, None
-        return json.loads(data), etag
-
-    async def state(self, kind: str) -> dict[str, Any]:
-        """History and active version of one prompt (newest version first)."""
-        self._check_kind(kind)
-        doc, _ = await self._read(kind)
-        active = doc["active"]
-        text = next((v["text"] for v in doc["versions"] if v["id"] == active), None)
+    # ---- reads
+    def _state(self, kind: str) -> dict[str, Any]:
+        rows = self._db.execute(
+            "SELECT number, text, note, author, created FROM prompt_version "
+            "WHERE kind = ? ORDER BY number DESC", (kind,)).fetchall()
+        versions = [{"id": f"v{r['number']}", **dict(r)} for r in rows]
+        act = self._db.execute("SELECT version, activated_by, activated_at FROM prompt_active "
+                               "WHERE kind = ?", (kind,)).fetchone()
+        active = act["version"] if act else FACTORY_ID
+        text = next((v["text"] for v in versions if v["id"] == active), None)
         if text is None:
             active, text = FACTORY_ID, FACTORY[kind]
         return {
             "kind": kind,
             "active": active,
             "active_text": text,
-            "activated_by": doc.get("activated_by"),
-            "activated_at": doc.get("activated_at"),
+            "activated_by": act["activated_by"] if act else None,
+            "activated_at": act["activated_at"] if act else None,
             "factory_text": FACTORY[kind],
-            "versions": sorted(doc["versions"], key=lambda v: v["number"], reverse=True),
+            "versions": versions,
         }
 
-    async def active_texts(self) -> tuple[str, str]:
-        """(base, extra) to build the system message; cached for a few seconds."""
-        now = time.monotonic()
-        if self._cache and now - self._cache[0] < CACHE_SECONDS:
-            return self._cache[1]
-        base = (await self.state("base"))["active_text"]
-        extra = (await self.state("extra"))["active_text"]
-        self._cache = (now, (base, extra))
-        return base, extra
+    async def state(self, kind: str) -> dict[str, Any]:
+        """History (newest first) and active version of one prompt."""
+        self._check_kind(kind)
+        return await self._run(self._state, kind)
 
-    async def _update(self, kind: str, change) -> dict[str, Any]:
-        for _ in range(3):
-            doc, etag = await self._read(kind)
-            change(doc)
-            try:
-                await self.backend.put(self._name(kind),
-                                       json.dumps(doc, ensure_ascii=False, indent=1).encode(),
-                                       etag)
-            except Conflict:
-                continue  # someone saved at the same time: re-read and apply again
-            self._cache = None
-            return await self.state(kind)
-        raise PromptError("Otra persona está guardando este prompt. Inténtalo de nuevo.")
+    async def active_texts(self) -> tuple[str, str]:
+        """(base, extra) used to build the system message."""
+        def read() -> tuple[str, str]:
+            return self._state("base")["active_text"], self._state("extra")["active_text"]
+        return await self._run(read)
+
+    # ---- writes
+    def _activate(self, kind: str, version: str, author: str | None) -> None:
+        self._db.execute(
+            "INSERT INTO prompt_active (kind, version, activated_by, activated_at) "
+            "VALUES (?, ?, ?, ?) ON CONFLICT(kind) DO UPDATE SET version = excluded.version, "
+            "activated_by = excluded.activated_by, activated_at = excluded.activated_at",
+            (kind, version, author, _now()))
+
+    def _save(self, kind: str, text: str, note: str, author: str | None) -> dict[str, Any]:
+        with self._db:  # one transaction
+            self._db.execute("BEGIN IMMEDIATE")
+            number = self._db.execute(
+                "SELECT COALESCE(MAX(number), 0) + 1 FROM prompt_version WHERE kind = ?",
+                (kind,)).fetchone()[0]
+            self._db.execute(
+                "INSERT INTO prompt_version (kind, number, text, note, author, created) "
+                "VALUES (?, ?, ?, ?, ?, ?)", (kind, number, text, note, author, _now()))
+            self._activate(kind, f"v{number}", author)
+            # keep the newest versions only
+            self._db.execute(
+                "DELETE FROM prompt_version WHERE kind = ? AND number <= ?",
+                (kind, number - MAX_VERSIONS))
+        return self._state(kind)
 
     async def save(self, kind: str, text: str, note: str, author: str | None) -> dict[str, Any]:
         """Store *text* as a new version and make it active."""
@@ -226,29 +203,21 @@ class PromptStore:
                 raise PromptError(
                     f"El prompt base debe incluir {' y '.join(missing)}: ahí se ponen las "
                     "rutas de la sesión. Sin ellas el agente no sabe dónde buscar.")
-
-        def change(doc: dict[str, Any]) -> None:
-            number = max((v["number"] for v in doc["versions"]), default=0) + 1
-            vid = f"v{number}"
-            doc["versions"].append({
-                "id": vid, "number": number, "text": text, "note": note.strip()[:200],
-                "author": author, "created": _now(),
-            })
-            doc.update(active=vid, activated_by=author, activated_at=_now())
-            # keep the newest versions (never drop the active one)
-            if len(doc["versions"]) > MAX_VERSIONS:
-                doc["versions"] = sorted(doc["versions"], key=lambda v: v["number"])
-                doc["versions"] = doc["versions"][-MAX_VERSIONS:]
-
-        return await self._update(kind, change)
+        return await self._run(self._save, kind, text, note.strip()[:200], author)
 
     async def activate(self, kind: str, version: str, author: str | None) -> dict[str, Any]:
         """Make a stored version (or ``factory``) the active one."""
         self._check_kind(kind)
 
-        def change(doc: dict[str, Any]) -> None:
-            if version != FACTORY_ID and not any(v["id"] == version for v in doc["versions"]):
-                raise PromptError(f"No existe la versión {version}.")
-            doc.update(active=version, activated_by=author, activated_at=_now())
+        def do() -> dict[str, Any]:
+            if version != FACTORY_ID:
+                number = version[1:] if version.startswith("v") else ""
+                exists = number.isdigit() and self._db.execute(
+                    "SELECT 1 FROM prompt_version WHERE kind = ? AND number = ?",
+                    (kind, int(number))).fetchone()
+                if not exists:
+                    raise PromptError(f"No existe la versión {version}.")
+            self._activate(kind, version, author)
+            return self._state(kind)
 
-        return await self._update(kind, change)
+        return await self._run(do)

@@ -34,9 +34,9 @@ class Settings:
     max_agent_steps: int = 8
     max_upload_mb: int = 20
 
-    # Editable prompts: container where their versions are kept, and who may edit
-    # them (emails; empty = every signed-in user).
-    prompts_container: str = "agent-config"
+    # Editable prompts: SQLite file with their versions (empty = default location)
+    # and who may edit them (emails; empty = every signed-in user).
+    prompts_db: str = ""
     admin_users: list[str] = field(default_factory=list)
 
     def can_edit_prompts(self, user: str | None) -> bool:
@@ -65,7 +65,7 @@ class Settings:
             ),
             max_agent_steps=int(env("MAX_AGENT_STEPS", "8")),
             max_upload_mb=int(env("MAX_UPLOAD_MB", "20")),
-            prompts_container=env("PROMPTS_CONTAINER", "agent-config"),
+            prompts_db=env("PROMPTS_DB", ""),
             admin_users=_list(env("ADMIN_USERS"), ""),
         )
 

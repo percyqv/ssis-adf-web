@@ -5,3 +5,5 @@ __pycache__/
 *.zip
 .pytest_cache/
 .ruff_cache/
+data/
+*.db

@@ -34,8 +34,9 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
 - **Prompts del agente** (botón arriba a la derecha): el *prompt base* y las *instrucciones
   adicionales* se editan desde la web. Cada vez que guardas se crea una versión nueva; desde el
   historial puedes volver a cualquiera. El prompt base tiene siempre **Restaurar de fábrica**
-  (el texto incluido en el código, `app/prompts.py`). Las versiones se guardan en el Storage,
-  en el contenedor `agent-config`. La pestaña *Prompt final* muestra lo que recibe el modelo.
+  (el texto incluido en el código, `app/prompts.py`). Las versiones se guardan en una base
+  SQLite dentro de la web (`/home/data/ssis-adf-web/prompts.db`, que se conserva entre reinicios
+  y despliegues). La pestaña *Prompt final* muestra lo que recibe el modelo.
 
 **Seguridad:**
 - La API key del MCP y el acceso a Azure OpenAI y al Storage viven solo en el servidor.
@@ -123,7 +124,7 @@ los roles *Cognitive Services OpenAI User* y *Storage Blob Data Contributor*).
 | `ALLOWED_TOOLS` | Herramientas que puede usar el modelo |
 | `MAX_AGENT_STEPS`, `MAX_UPLOAD_MB` | Límites (8 pasos, 20 MB) |
 | `ADMIN_USERS` | Correos que pueden editar los prompts, separados por coma. Vacío = cualquier usuario con sesión |
-| `PROMPTS_CONTAINER` | Contenedor donde se guardan las versiones de los prompts (por defecto `agent-config`; se crea solo) |
+| `PROMPTS_DB` | Archivo SQLite de los prompts. Por defecto `/home/data/ssis-adf-web/prompts.db` en App Service y `data/prompts.db` en local |
 
 ## Tests
 

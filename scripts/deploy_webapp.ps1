@@ -155,7 +155,7 @@ Invoke-Az webapp identity assign -n $WebAppName -g $AppRg -o none
 $principal = Invoke-Az webapp identity show -n $WebAppName -g $AppRg --query principalId -o tsv
 
 Invoke-Az webapp config set -n $WebAppName -g $AppRg --always-on true --ftps-state Disabled `
-    --startup-file "gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:8000 --timeout 300 app.main:app" `
+    --startup-file "gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:8000 --timeout 300 app.main:app" `
     -o none
 Invoke-Az webapp config appsettings set -n $WebAppName -g $AppRg -o none --settings `
     "MCP_URL=$mcpUrl" `

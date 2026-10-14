@@ -2,14 +2,13 @@
 from __future__ import annotations
 
 import asyncio
-import os
 from dataclasses import replace
 
 import pytest
 from fastapi.testclient import TestClient
 
 from app.main import create_app
-from app.prompts import FACTORY_BASE, MemoryBackend, PromptError, PromptStore, render
+from app.prompts import FACTORY_BASE, PromptError, PromptStore, render
 from tests.test_app import SESSION, SETTINGS, FakeMcp, FakeStorage, ScriptedModel
 
 BASE_V1 = "Eres un experto. Entrada {{ENTRADA}}, salida {{SALIDA}}."
@@ -20,7 +19,7 @@ def run(coro):
 
 
 def test_versions_restore_and_factory() -> None:
-    store = PromptStore(MemoryBackend())
+    store = PromptStore(":memory:")
     s = run(store.state("base"))
     assert s["active"] == "factory" and s["active_text"] == FACTORY_BASE and s["versions"] == []
 
@@ -41,7 +40,7 @@ def test_versions_restore_and_factory() -> None:
 
 
 def test_base_prompt_must_keep_placeholders() -> None:
-    store = PromptStore(MemoryBackend())
+    store = PromptStore(":memory:")
     for bad in ("", "Sin rutas", "Solo {{ENTRADA}}"):
         with pytest.raises(PromptError):
             run(store.save("base", bad, "", None))
@@ -63,7 +62,7 @@ def client(store, settings=SETTINGS, model=None) -> TestClient:
 
 
 def test_prompt_endpoints_and_chat_uses_active_prompt() -> None:
-    store = PromptStore(MemoryBackend())
+    store = PromptStore(":memory:")
     model = ScriptedModel({"content": "ok", "tool_calls": []})
     with client(store, model=model) as c:
         r = c.get("/api/prompts", params={"input": "az://ssis-packages/F", "output": "az://adf-artifacts/F"})
@@ -89,7 +88,7 @@ def test_prompt_endpoints_and_chat_uses_active_prompt() -> None:
 
 def test_only_admins_can_edit_when_configured() -> None:
     settings = replace(SETTINGS, admin_users=["Ana@Inetum.com"])
-    with client(PromptStore(MemoryBackend()), settings=settings) as c:
+    with client(PromptStore(":memory:"), settings=settings) as c:
         luis = {"X-MS-CLIENT-PRINCIPAL-NAME": "luis@inetum.com"}
         ana = {"X-MS-CLIENT-PRINCIPAL-NAME": "ana@inetum.com"}
         assert c.get("/api/prompts", headers=luis).json()["can_edit"] is False
@@ -100,41 +99,43 @@ def test_only_admins_can_edit_when_configured() -> None:
 
 
 def test_chat_falls_back_to_factory_if_store_fails() -> None:
-    class Broken(MemoryBackend):
-        async def get(self, name):
-            raise RuntimeError("storage caído")
+    class Broken(PromptStore):
+        async def active_texts(self):
+            raise RuntimeError("base de datos bloqueada")
 
     model = ScriptedModel({"content": "ok", "tool_calls": []})
-    with client(PromptStore(Broken()), model=model) as c:
+    with client(Broken(":memory:"), model=model) as c:
         r = c.post("/api/chat", json={**SESSION, "messages": [{"role": "user", "content": "x"}]})
     assert r.status_code == 200
     assert model.seen[0][0]["content"].startswith("Eres un asistente experto")
 
 
-@pytest.mark.skipif(not os.environ.get("AZURE_STORAGE_CONNECTION_STRING"),
-                    reason="needs Azurite (AZURE_STORAGE_CONNECTION_STRING)")
-def test_blob_backend_against_azurite() -> None:
-    import uuid
-
-    from azure.storage.blob.aio import BlobServiceClient
-
-    from app.prompts import BlobBackend
+def test_sqlite_file_survives_restart_and_concurrent_saves(tmp_path) -> None:
+    path = str(tmp_path / "sub" / "prompts.db")  # folder is created
 
     async def scenario():
-        conn = os.environ["AZURE_STORAGE_CONNECTION_STRING"]
-        svc = BlobServiceClient.from_connection_string(conn)
-        container = f"cfg{uuid.uuid4().hex[:10]}"
-        try:
-            store = PromptStore(BlobBackend(svc, container))  # container created on first save
-            assert (await store.state("extra"))["active"] == "factory"
-            await store.save("extra", "uno", "", "a")
-            await store.save("extra", "dos", "", "b")
-            # a second instance (another App Service worker) sees the same history
-            other = PromptStore(BlobBackend(svc, container))
-            s = await other.activate("extra", "v1", "c")
-            assert s["active_text"] == "uno" and len(s["versions"]) == 2
-        finally:
-            await svc.delete_container(container)
-            await svc.close()
+        store = PromptStore(path)
+        await asyncio.gather(*(store.save("extra", f"texto {i}", "", "a") for i in range(10)))
+        await store.activate("extra", "v3", "b")
+        store.close()
 
-    run(scenario())
+        again = PromptStore(path)  # e.g. after an App Service restart
+        s = await again.state("extra")
+        again.close()
+        return s
+
+    s = run(scenario())
+    assert [v["number"] for v in s["versions"]] == list(range(10, 0, -1))
+    assert s["active"] == "v3" and s["activated_by"] == "b"
+
+
+def test_old_versions_are_pruned(monkeypatch) -> None:
+    import app.prompts as prompts
+
+    monkeypatch.setattr(prompts, "MAX_VERSIONS", 3)
+    store = PromptStore(":memory:")
+    for i in range(5):
+        s = run(store.save("extra", f"t{i}", "", None))
+    assert [v["id"] for v in s["versions"]] == ["v5", "v4", "v3"]
+    with pytest.raises(PromptError):
+        run(store.activate("extra", "v1", None))

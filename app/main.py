@@ -2,7 +2,7 @@
 SSIS → ADF web assistant.
 
 Run locally:   uvicorn app.main:app --reload
-App Service:   gunicorn -k uvicorn.workers.UvicornWorker -w 2 -b 0.0.0.0:8000 app.main:app
+App Service:   gunicorn -k uvicorn.workers.UvicornWorker -w 1 -b 0.0.0.0:8000 app.main:app
 """
 from __future__ import annotations
 
@@ -25,10 +25,9 @@ from .prompts import (
     FACTORY_ID,
     KINDS,
     PLACEHOLDERS,
-    BlobBackend,
-    MemoryBackend,
     PromptError,
     PromptStore,
+    default_db_path,
     render,
 )
 from .storage import Storage, StorageError, parse_location
@@ -94,16 +93,13 @@ def create_app(
             Storage(settings.storage_account, settings.allowed_containers)
             if settings.storage_account else None
         )
-        if prompt_store is not None:
-            app.state.prompts = prompt_store
-        elif hasattr(app.state.storage, "service"):
-            app.state.prompts = PromptStore(
-                BlobBackend(app.state.storage.service, settings.prompts_container))
-        else:  # local run without Storage: prompts live in memory
-            app.state.prompts = PromptStore(MemoryBackend())
+        app.state.prompts = prompt_store or PromptStore(settings.prompts_db or default_db_path())
+        log.info("Prompts en %s", app.state.prompts.path)
         if settings.missing():
             log.warning("Configuración incompleta: %s", ", ".join(settings.missing()))
         yield
+        if prompt_store is None:
+            app.state.prompts.close()
         if app.state.storage is not None:
             await app.state.storage.close()
 

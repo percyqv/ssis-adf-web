@@ -54,6 +54,10 @@ class Storage:
                 f"https://{account}.blob.core.windows.net", credential=DefaultAzureCredential()
             )
 
+    @property
+    def service(self) -> BlobServiceClient:
+        return self._svc
+
     async def list(self, location: str, suffix: str = "") -> list[dict[str, Any]]:
         loc = parse_location(location, self.allowed)
         container = self._svc.get_container_client(loc.container)

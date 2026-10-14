@@ -360,6 +360,7 @@ async function uploadFiles(files) {
 // ---------------------------------------------------------------- init
 async function init() {
   Diagram.initViewer();
+  Prompts.init();
   let cfg = { default_input: "", default_output: "" };
   try {
     cfg = await api("/api/config");

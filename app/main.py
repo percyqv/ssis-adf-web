@@ -21,6 +21,16 @@ from pydantic import BaseModel, Field
 from .agent import Agent, ChatModel, SessionSettings
 from .config import Settings
 from .mcp_client import McpClient, McpError
+from .prompts import (
+    FACTORY_ID,
+    KINDS,
+    PLACEHOLDERS,
+    BlobBackend,
+    MemoryBackend,
+    PromptError,
+    PromptStore,
+    render,
+)
 from .storage import Storage, StorageError, parse_location
 from .tools import ToolError, build_local_tools, pipeline_graph
 
@@ -48,11 +58,21 @@ class ArtifactsAction(BaseModel):
     artifacts_dir: str
 
 
+class PromptSave(BaseModel):
+    text: str
+    note: str = ""
+
+
+class PromptActivate(BaseModel):
+    version: str
+
+
 def create_app(
     settings: Settings | None = None,
     model: ChatModel | None = None,
     mcp: McpClient | None = None,
     storage: Storage | None = None,
+    prompt_store: PromptStore | None = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
 
@@ -74,6 +94,13 @@ def create_app(
             Storage(settings.storage_account, settings.allowed_containers)
             if settings.storage_account else None
         )
+        if prompt_store is not None:
+            app.state.prompts = prompt_store
+        elif hasattr(app.state.storage, "service"):
+            app.state.prompts = PromptStore(
+                BlobBackend(app.state.storage.service, settings.prompts_container))
+        else:  # local run without Storage: prompts live in memory
+            app.state.prompts = PromptStore(MemoryBackend())
         if settings.missing():
             log.warning("Configuración incompleta: %s", ", ".join(settings.missing()))
         yield
@@ -112,7 +139,13 @@ def create_app(
             session.validate(settings.allowed_containers)
         except ValueError as exc:
             raise HTTPException(400, str(exc)) from exc
+        try:
+            prompt = await request.app.state.prompts.active_texts()
+        except Exception:  # never block the chat because of the prompt store
+            log.exception("No se pudieron leer los prompts; se usa el de fábrica")
+            prompt = None
         agent = Agent(
+            prompt=prompt,
             model=_require(request.app.state.model, "AZURE_OPENAI_ENDPOINT / DEPLOYMENT"),
             mcp=_require(request.app.state.mcp, "MCP_URL / MCP_API_KEY"),
             allowed_tools=settings.allowed_tools,
@@ -136,6 +169,57 @@ def create_app(
             "steps": [s.__dict__ for s in result.steps],
             "attachments": result.attachments,
         }
+
+    # ---- editable prompts ----------------------------------------------------
+    def _editor(request: Request) -> str | None:
+        user = _current_user(request)
+        if not settings.can_edit_prompts(user):
+            raise HTTPException(403, "Solo los administradores pueden cambiar los prompts.")
+        return user
+
+    def _kind(kind: str) -> str:
+        if kind not in KINDS:
+            raise HTTPException(404, f"Prompt desconocido: {kind}")
+        return kind
+
+    @app.get("/api/prompts")
+    async def get_prompts(request: Request, input: str = "", output: str = "") -> dict[str, Any]:
+        store: PromptStore = request.app.state.prompts
+        try:
+            states = {k: await store.state(k) for k in KINDS}
+        except Exception as exc:
+            log.exception("No se pudieron leer los prompts")
+            raise HTTPException(502, f"No se pudieron leer los prompts: {exc}") from exc
+        inp = input.strip() or settings.default_input
+        out = output.strip() or settings.default_output
+        return {
+            "can_edit": settings.can_edit_prompts(_current_user(request)),
+            "placeholders": list(PLACEHOLDERS),
+            "factory_id": FACTORY_ID,
+            "prompts": states,
+            "effective": render(states["base"]["active_text"], states["extra"]["active_text"],
+                                inp, out),
+        }
+
+    @app.post("/api/prompts/{kind}")
+    async def save_prompt(kind: str, body: PromptSave, request: Request) -> dict[str, Any]:
+        user = _editor(request)
+        try:
+            state = await request.app.state.prompts.save(_kind(kind), body.text, body.note, user)
+        except PromptError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info("prompt saved kind=%s version=%s user=%s", kind, state["active"], user)
+        return state
+
+    @app.post("/api/prompts/{kind}/activate")
+    async def activate_prompt(kind: str, body: PromptActivate, request: Request) -> dict[str, Any]:
+        user = _editor(request)
+        try:
+            state = await request.app.state.prompts.activate(_kind(kind), body.version, user)
+        except PromptError as exc:
+            raise HTTPException(400, str(exc)) from exc
+        log.info("prompt activated kind=%s version=%s user=%s", kind, body.version, user)
+        return state
 
     # ---- direct actions (no AI): call the MCP tools straight away -----------
 

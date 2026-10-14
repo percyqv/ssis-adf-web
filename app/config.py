@@ -34,6 +34,16 @@ class Settings:
     max_agent_steps: int = 8
     max_upload_mb: int = 20
 
+    # Editable prompts: container where their versions are kept, and who may edit
+    # them (emails; empty = every signed-in user).
+    prompts_container: str = "agent-config"
+    admin_users: list[str] = field(default_factory=list)
+
+    def can_edit_prompts(self, user: str | None) -> bool:
+        if not self.admin_users:
+            return True
+        return bool(user) and user.lower() in {u.lower() for u in self.admin_users}
+
     @classmethod
     def from_env(cls) -> Settings:
         env = os.environ.get
@@ -55,6 +65,8 @@ class Settings:
             ),
             max_agent_steps=int(env("MAX_AGENT_STEPS", "8")),
             max_upload_mb=int(env("MAX_UPLOAD_MB", "20")),
+            prompts_container=env("PROMPTS_CONTAINER", "agent-config"),
+            admin_users=_list(env("ADMIN_USERS"), ""),
         )
 
     def missing(self) -> list[str]:

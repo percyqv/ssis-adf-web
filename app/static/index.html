@@ -9,7 +9,10 @@
 <body>
   <header class="topbar">
     <div class="brand"><span class="logo">⇄</span> SSIS <span class="arrow">→</span> ADF</div>
-    <div class="user" id="user"></div>
+    <div class="top-actions">
+      <button class="tool" id="open-prompts" type="button">Prompts del agente</button>
+      <div class="user" id="user"></div>
+    </div>
   </header>
 
   <div id="config-warning" class="banner" hidden></div>
@@ -94,10 +97,27 @@
     </footer>
   </dialog>
 
+  <dialog id="prompts" class="viewer sheet" aria-labelledby="prompts-title">
+    <header class="viewer-bar">
+      <div>
+        <h2 id="prompts-title" class="viewer-title">Prompts del agente</h2>
+        <p class="viewer-meta">Lo que recibe el modelo al empezar cada conversación.</p>
+      </div>
+      <button class="tool" id="prompts-close" type="button" aria-label="Cerrar">✕</button>
+    </header>
+    <nav class="tabs" role="tablist">
+      <button role="tab" type="button" data-tab="base" aria-selected="true">Prompt base</button>
+      <button role="tab" type="button" data-tab="extra" aria-selected="false">Instrucciones adicionales</button>
+      <button role="tab" type="button" data-tab="final" aria-selected="false">Prompt final</button>
+    </nav>
+    <div id="prompts-body" class="sheet-body"></div>
+  </dialog>
+
   <script src="/static/vendor/cytoscape.min.js"></script>
   <script src="/static/vendor/elk.bundled.js"></script>
   <script src="/static/vendor/cytoscape-elk.js"></script>
   <script src="/static/diagram.js"></script>
+  <script src="/static/prompts.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -31,6 +31,12 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
   ForEach/Until/If/Switch anidados, panel de detalles (SQL, linked service, reintentos, JSON),
   zoom y descarga en PNG. El chat también lo muestra cuando pides "muéstrame el flujo de …".
 
+- **Prompts del agente** (botón arriba a la derecha): el *prompt base* y las *instrucciones
+  adicionales* se editan desde la web. Cada vez que guardas se crea una versión nueva; desde el
+  historial puedes volver a cualquiera. El prompt base tiene siempre **Restaurar de fábrica**
+  (el texto incluido en el código, `app/prompts.py`). Las versiones se guardan en el Storage,
+  en el contenedor `agent-config`. La pestaña *Prompt final* muestra lo que recibe el modelo.
+
 **Seguridad:**
 - La API key del MCP y el acceso a Azure OpenAI y al Storage viven solo en el servidor.
 - El agente solo acepta rutas `az://` de los contenedores permitidos (`ALLOWED_CONTAINERS`).
@@ -45,6 +51,7 @@ Navegador ──▶ Web App (App Service, Python/FastAPI) ──▶ Azure OpenAI
 | `app/llm.py` | Cliente de Azure OpenAI (API key o identidad administrada) |
 | `app/mcp_client.py` | Cliente MCP (Streamable HTTP + `X-API-Key`) |
 | `app/storage.py` | Subir, listar y descargar en Blob Storage |
+| `app/prompts.py` | Prompts editables: versión de fábrica, historial y activación |
 | `app/graph.py` | Pipeline ADF (JSON) → nodos y aristas para el diagrama |
 | `app/tools.py` | Herramientas propias de la web para el agente (artefactos y diagrama) |
 | `app/static/diagram.js` | Visor del diagrama; librerías en `app/static/vendor/` |
@@ -115,6 +122,8 @@ los roles *Cognitive Services OpenAI User* y *Storage Blob Data Contributor*).
 | `DEFAULT_INPUT`, `DEFAULT_OUTPUT` | Rutas iniciales del panel |
 | `ALLOWED_TOOLS` | Herramientas que puede usar el modelo |
 | `MAX_AGENT_STEPS`, `MAX_UPLOAD_MB` | Límites (8 pasos, 20 MB) |
+| `ADMIN_USERS` | Correos que pueden editar los prompts, separados por coma. Vacío = cualquier usuario con sesión |
+| `PROMPTS_CONTAINER` | Contenedor donde se guardan las versiones de los prompts (por defecto `agent-config`; se crea solo) |
 
 ## Tests
 

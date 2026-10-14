@@ -185,6 +185,38 @@ details.steps li.fail::marker { content: "✗ "; color: var(--err); }
 .swatch { display: inline-block; width: 22px; height: 3px; border-radius: 2px; background: var(--c); }
 .badge-warn { display: inline-grid; place-items: center; width: 16px; height: 16px; border-radius: 50%; background: var(--warn); color: #fff; font-style: normal; font-weight: 700; font-size: 11px; }
 
+/* prompts editor */
+.top-actions { display: flex; align-items: center; gap: 14px; }
+.sheet { height: min(820px, 92vh); }
+.tabs { display: flex; gap: 4px; padding: 0 18px; border-bottom: 1px solid var(--line); }
+.tabs button { background: none; color: var(--muted); border-radius: 0; padding: 10px 12px; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tabs button[aria-selected="true"] { color: var(--ink); border-bottom-color: var(--accent); font-weight: 600; }
+.sheet-body { flex: 1; min-height: 0; overflow: auto; }
+.prompt-edit { display: grid; grid-template-columns: 1fr 300px; height: 100%; min-height: 0; }
+.editor { display: flex; flex-direction: column; padding: 16px 18px; min-height: 0; }
+.editor-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 10px; }
+.editor .state { margin: 0; font-size: 13px; color: var(--muted); }
+.editor textarea {
+  flex: 1; min-height: 260px; resize: none; padding: 12px 14px; border: 1px solid var(--line); border-radius: 8px;
+  background: var(--bg); color: var(--ink); font: 13px/1.55 "Cascadia Code", Consolas, ui-monospace, monospace;
+}
+.editor textarea[readonly] { opacity: .85; }
+.save-row { display: flex; gap: 8px; margin-top: 10px; }
+.save-row input { flex: 1; font-family: inherit; }
+button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--line); padding: 6px 12px; font-size: 13px; }
+button.link { background: none; color: var(--accent); padding: 0; font-size: 12px; border-radius: 0; }
+.history { border-left: 1px solid var(--line); padding: 16px 18px; overflow-y: auto; }
+.history h3 { margin: 0 0 8px; font-size: 13px; }
+.history ol { list-style: none; margin: 0; padding: 0; }
+.history li { padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+.history li.is-active { box-shadow: inset 3px 0 0 var(--ok); padding-left: 10px; }
+.history li.factory { border-top-style: dashed; }
+.history small { color: var(--muted); }
+.history p { margin: 4px 0 0; }
+.v-acts { display: flex; gap: 14px; margin-top: 6px; }
+.final { padding: 16px 18px; }
+.final pre { margin: 0; padding: 14px 16px; background: var(--code-bg); border-radius: 8px; white-space: pre-wrap; font-size: 13px; line-height: 1.55; }
+
 .composer { display: flex; gap: 10px; padding: 12px 24px 20px; border-top: 1px solid var(--line); background: var(--panel); }
 .composer textarea { flex: 1; resize: none; max-height: 160px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--ink); font: inherit; }
 
@@ -195,5 +227,8 @@ details.steps li.fail::marker { content: "✗ "; color: var(--err); }
   .viewer-body { grid-template-columns: 1fr; grid-template-rows: 1fr auto; }
   .viewer-details { border-left: 0; border-top: 1px solid var(--line); max-height: 36%; }
   .viewer-bar { flex-wrap: wrap; }
+  .prompt-edit { grid-template-columns: 1fr; height: auto; }
+  .history { border-left: 0; border-top: 1px solid var(--line); }
+  .top-actions .user { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }

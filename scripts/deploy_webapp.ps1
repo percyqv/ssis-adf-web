@@ -39,7 +39,8 @@ param(
     [string] $StorageAccount  = "stsiss2adflab01",
     [string] $McpAppName      = "ssis-adf-agent",       # Container App del MCP
     [string] $DefaultInput    = "az://ssis-packages/Finanzas",
-    [string] $DefaultOutput   = "az://adf-artifacts/Finanzas"
+    [string] $DefaultOutput   = "az://adf-artifacts/Finanzas",
+    [string] $AdminUsers      = ""                      # correos que pueden editar los prompts (separados por coma); vacio = no se cambia
 )
 
 $ErrorActionPreference = "Stop"
@@ -167,6 +168,10 @@ Invoke-Az webapp config appsettings set -n $WebAppName -g $AppRg -o none --setti
     "DEFAULT_OUTPUT=$DefaultOutput" `
     "WEBSITES_PORT=8000" `
     "SCM_DO_BUILD_DURING_DEPLOYMENT=true"
+if ($AdminUsers) {
+    Invoke-Az webapp config appsettings set -n $WebAppName -g $AppRg -o none --settings "ADMIN_USERS=$AdminUsers"
+    Write-Host "Pueden editar los prompts: $AdminUsers"
+}
 
 # ---------------------------------------------------------------------------
 Write-Step "Permisos de la identidad de la web"

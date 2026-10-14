@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .mcp_client import McpClient, McpError, McpTool
+from .prompts import FACTORY_BASE, render
 
 _AZ_PREFIX = re.compile(r"^az://[a-z0-9](?:[a-z0-9-]{1,61}[a-z0-9])(?:/[^\s<>\"'`]*)?$")
 _MAX_TOOL_RESULT_CHARS = 12_000
@@ -82,35 +83,12 @@ class ToolError(Exception):
     """Expected tool failure; the message is shown to the model."""
 
 
-def system_prompt(settings: SessionSettings) -> str:
-    inp = settings.input_location.rstrip("/")
-    out = settings.output_location.rstrip("/")
-    return f"""Eres un asistente experto en migrar paquetes SSIS a Azure Data Factory (ADF).
-Respondes en español, de forma breve y clara.
-
-Tienes herramientas del servidor MCP "ssis-adf-agent" para escanear, analizar, convertir
-y validar paquetes. Úsalas en lugar de suponer resultados; nunca inventes datos.
-
-Configuración de esta sesión (úsala siempre salvo que el usuario indique otra ruta):
-- Carpeta de ENTRADA (paquetes .dtsx): {inp}
-- Carpeta base de SALIDA (artefactos ADF): {out}
-
-Convenciones:
-- Para escanear usa scan_ssis_packages con source_type "blob" y path_or_connection "{inp}".
-- Un paquete llamado P está en "{inp}/P.dtsx".
-- Al convertir P, usa output_dir "{out}/P" (una carpeta por paquete).
-- Después de convertir, valida siempre esa carpeta con validate_adf_artifacts.
-- No despliegues nada en Azure Data Factory.
-- Para ver qué artefactos existen usa list_artifacts; para leer uno, read_artifact.
-- Si piden ver, dibujar o explicar el flujo de un pipeline, usa get_pipeline_diagram
-  (con el nombre del paquete). La interfaz dibuja el diagrama automáticamente: NO escribas
-  diagramas en texto (Mermaid, ASCII); explica el flujo en pocas frases.
-
-Al responder:
-- Resume lo generado (pipelines, linked services, datasets, data flows, triggers).
-- Destaca los avisos "[MANUAL REVIEW]" y explica qué habría que revisar.
-- Si algo falla, explica el error en lenguaje sencillo y sugiere qué hacer.
-"""
+def system_prompt(
+    settings: SessionSettings, base: str | None = None, extra: str = ""
+) -> str:
+    """System message: the (editable) base prompt + additional instructions."""
+    return render(base if base is not None else FACTORY_BASE, extra,
+                  settings.input_location, settings.output_location)
 
 
 def _tool_schema(tool: McpTool) -> dict[str, Any]:
@@ -178,6 +156,7 @@ class Agent:
         max_steps: int = 8,
         allowed_containers: list[str] | None = None,
         local_tools: list[LocalTool] | None = None,
+        prompt: tuple[str, str] | None = None,
     ) -> None:
         self.model = model
         self.mcp = mcp
@@ -185,6 +164,7 @@ class Agent:
         self.max_steps = max_steps
         self.allowed_containers = allowed_containers or []
         self.local_tools = {t.name: t for t in (local_tools or [])}
+        self.prompt = prompt  # (base, extra); None → factory prompt
 
     async def run(
         self, conversation: list[dict[str, str]], settings: SessionSettings
@@ -200,7 +180,7 @@ class Agent:
         attachments: list[dict[str, Any]] = []
 
         messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt(settings)}
+            {"role": "system", "content": system_prompt(settings, *(self.prompt or (None, "")))}
         ]
         for m in conversation[-20:]:
             if m.get("role") in ("user", "assistant") and isinstance(m.get("content"), str):

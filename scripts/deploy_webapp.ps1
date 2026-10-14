@@ -206,8 +206,13 @@ $deployCode = $LASTEXITCODE
 $ErrorActionPreference = "Stop"
 Remove-Item $zipPath -ErrorAction SilentlyContinue
 if ($deployCode -ne 0) {
-    if (($deployOut | Out-String) -match '504|GatewayTimeout|timed out') {
+    $text = $deployOut | Out-String
+    if ($text -match '504|GatewayTimeout|timed out') {
         Write-Host "La subida tardo mas de lo esperado (504); el despliegue continua en Azure." -ForegroundColor Yellow
+    } elseif ($text -match 'Build successful' -and $text -match 'failed to start within') {
+        # En planes B1 el primer arranque tras instalar dependencias puede pasar de 10 min;
+        # az se rinde pero la web sigue arrancando. Se comprueba abajo con /healthz.
+        Write-Host "Azure dejo de esperar el arranque (mas de 10 min), pero la compilacion fue bien; se sigue esperando." -ForegroundColor Yellow
     } else {
         $deployOut | Out-Host
         throw "Fallo la publicacion del codigo. Revisa: az webapp log deployment show -n $WebAppName -g $AppRg"
